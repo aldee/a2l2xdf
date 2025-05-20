@@ -3,6 +3,10 @@ import xml.etree.ElementTree as ET
 import argparse
 
 def create_xdf_element(parent, tag, text=None, attributes=None):
+    """Helper function to create an XML element.
+
+    Ensures all attribute values are strings and converts None to empty string.
+    """
     attributes_to_use = {}
     if attributes:
         processed_attributes = {}
@@ -26,10 +30,14 @@ def create_xdf_element(parent, tag, text=None, attributes=None):
     return element
 
 def create_text_element(parent, tag, text, attributes=None):
+    """Helper function to create an XML element with text content."""
     element = create_xdf_element(parent, tag, text=str(text), attributes=attributes)
     return element
 
 def json_to_xdf(json_file, xdf_file, base_offset_hex):
+    """
+    Converts a JSON file to an XDF file based on the defined mappings.
+    """
     try:
         with open(json_file, 'r') as f:
             data = json.load(f)
@@ -56,16 +64,16 @@ def json_to_xdf(json_file, xdf_file, base_offset_hex):
     create_text_element(xdfheader, "description", f"Mappack for {deftitle_from_json} generated from JSON")
     create_xdf_element(xdfheader, "BASEOFFSET", attributes={"offset": str(base_offset_int), "subtract": "0"})
     create_xdf_element(xdfheader, "DEFAULTS",
-                       attributes={"datasizeinbits": "8", "sigdigits": "4", "outputtype": "1", 
-                                   "signed": "0", # Default signedness (can be overridden by mmedtypeflags)
+                       attributes={"datasizeinbits": "8", "sigdigits": "4", "outputtype": "1", "signed": "0",
                                    "lsbfirst": "1", "float": "0"})
     create_xdf_element(xdfformat, "REGION",
                        attributes={"type": "0xFFFFFFFF", "startaddress": "0x0", "size": "0x800000",
                                    "regioncolor": "0x0", "regionflags": "0x0", "name": "Binary",
                                    "desc": "Full Binary Region"})
 
+    # --- Category Handling ---
     categories_map = {}
-    category_index_counter = 0 
+    category_index_counter = 0 # Decimal counter for 0-based conceptual index
     map_groups_from_json = data.get("maps", [])
 
     if not map_groups_from_json:
@@ -82,13 +90,14 @@ def json_to_xdf(json_file, xdf_file, base_offset_hex):
                 processed_category_name = f"Unnamed Category {i + 1}"
             
             if processed_category_name not in categories_map:
-                hex_category_index_str = hex(category_index_counter) 
+                hex_category_index_str = hex(category_index_counter) # Convert decimal counter to hex string
                 categories_map[processed_category_name] = hex_category_index_str 
                 
                 create_xdf_element(xdfformat, "CATEGORY",
-                                   attributes={"index": hex_category_index_str, 
+                                   attributes={"index": hex_category_index_str, # Use 0-based hex index for CATEGORY definition
                                                "name": processed_category_name})
                 category_index_counter += 1
+    # --- End Category Handling ---
     
     for group_idx, maps_group in enumerate(map_groups_from_json):
         current_group_name_val = maps_group.get("name")
@@ -97,12 +106,15 @@ def json_to_xdf(json_file, xdf_file, base_offset_hex):
         if not processed_group_name_for_lookup:
             processed_group_name_for_lookup = f"Unnamed Category {group_idx + 1}"
         
+        # Get the 0-based HEXADECIMAL category index string
         zero_based_hex_idx_str = categories_map.get(processed_group_name_for_lookup, "0x0") 
         
         try:
+            # Convert 0-based hex string (e.g., "0xa") to 0-based decimal integer (e.g., 10)
             zero_based_decimal_val = int(zero_based_hex_idx_str, 16)
+            # Add 1 to make it 1-based decimal (e.g., 11) for CATEGORYMEM's category attribute
             one_based_decimal_val_for_categorymem = zero_based_decimal_val + 1
-            category_attr_for_table = str(one_based_decimal_val_for_categorymem)
+            category_attr_for_table = str(one_based_decimal_val_for_categorymem) # e.g., "11"
         except ValueError:
             category_attr_for_table = "1" 
 
@@ -120,7 +132,7 @@ def json_to_xdf(json_file, xdf_file, base_offset_hex):
             
             create_xdf_element(xdftable, "CATEGORYMEM", 
                                attributes={"index": "0", 
-                                           "category": category_attr_for_table}) 
+                                           "category": category_attr_for_table}) # Use 1-based decimal string
 
             create_xdf_axis(xdftable, "x", json_map.get("x", {}), base_offset_int, mmedaddress_hex)
             create_xdf_axis(xdftable, "y", json_map.get("y", {}), base_offset_int, mmedaddress_hex)
@@ -131,6 +143,7 @@ def json_to_xdf(json_file, xdf_file, base_offset_hex):
     tree.write(xdf_file, encoding='utf-8', xml_declaration=True)
 
 def create_xdf_axis(axis_parent, axis_id_param, json_axis, base_offset_int, table_unique_id_hex):
+    """Creates an XDFAXIS element for x or y axis."""
     if not json_axis: 
         return
     
@@ -160,15 +173,9 @@ def create_xdf_axis(axis_parent, axis_id_param, json_axis, base_offset_int, tabl
     stride_bytes = float(stride_val) if stride_val is not None else element_default_bytes
     actual_stride_bits_for_storage = int(stride_bytes * 8)
 
-    current_mmedtypeflags_val = 0x02 
-    is_xy_signed = json_axis.get("signed", False) 
-    if is_xy_signed:
-        current_mmedtypeflags_val = current_mmedtypeflags_val | 0x01
-    mmedtypeflags_xy_hex = hex(current_mmedtypeflags_val)
-
     embeddata_attribs = {
         "mmedelementsizebits": str(mmedelementsizebits),
-        "mmedtypeflags": mmedtypeflags_xy_hex,
+        "mmedtypeflags": "0x02",
     }
 
     if address is not None:
@@ -191,7 +198,7 @@ def create_xdf_axis(axis_parent, axis_id_param, json_axis, base_offset_int, tabl
         create_xdf_element(xdf_axis, "EMBEDDEDDATA", attributes=embeddata_attribs)
 
     create_text_element(xdf_axis, "indexcount", str(size))
-    create_text_element(xdf_axis, "datatype", "1" if is_xy_signed else "0") # Example: 1 for signed, 0 for unsigned
+    create_text_element(xdf_axis, "datatype", "0")
     
     _units_val = json_axis.get("units")
     axis_units_label = str(_units_val).strip() if _units_val is not None else axis_label_text
@@ -207,26 +214,16 @@ def create_xdf_axis(axis_parent, axis_id_param, json_axis, base_offset_int, tabl
     create_xdf_element(math_element, "VAR", attributes={"id": "X"})
 
     decimalpl = json_axis.get("precision", 2)
-    
-    min_val_str = str(json_axis.get("min_val", "0.0")) # Default, consider signedness
-    max_val_default_xy = "0.0" 
-    if is_xy_signed and mmedelementsizebits == 8:
-        max_val_default_xy = "127.0"
-        if min_val_str == "0.0" and json_axis.get("min_val") is None: min_val_str = "-128.0"
-    elif is_xy_signed and mmedelementsizebits == 16:
-        max_val_default_xy = "32767.0"
-        if min_val_str == "0.0" and json_axis.get("min_val") is None: min_val_str = "-32768.0"
-    elif mmedelementsizebits == 8: # Unsigned
-        max_val_default_xy = "255.0"
-    else: # 16-bit unsigned
-        max_val_default_xy = "65535.0"
-    max_val_str = str(json_axis.get("max_val", max_val_default_xy ))
+    min_val_str = str(json_axis.get("min_val", "0.0"))
+    max_val_default = "65535.0" if mmedelementsizebits == 16 else "255.0"
+    max_val_str = str(json_axis.get("max_val", max_val_default ))
 
     create_text_element(xdf_axis, "decimalpl", str(decimalpl))
     create_text_element(xdf_axis, "min", min_val_str)
     create_text_element(xdf_axis, "max", max_val_str)
 
 def create_xdf_axis_z(axis_parent, axis_id_param, json_map, base_offset_int):
+    """Creates an XDFAXIS element for the Z-axis (data)."""
     xdf_axis = create_xdf_element(axis_parent, "XDFAXIS", attributes={"id": axis_id_param})
     map_name_for_z_title_val = json_map.get("name")
     map_name_for_z_title = str(map_name_for_z_title_val).strip() if map_name_for_z_title_val is not None else "Table Data"
@@ -259,18 +256,12 @@ def create_xdf_axis_z(axis_parent, axis_id_param, json_map, base_offset_int):
          if width > 1 : 
             mmedmajorstridebits_val = str(int(width * actual_element_stride_bits_Z))
 
-    current_mmedtypeflags_val = 0x02
-    is_z_signed = json_map.get("z_signed", False) 
-    if is_z_signed:
-        current_mmedtypeflags_val = current_mmedtypeflags_val | 0x01
-    mmedtypeflags_hex = hex(current_mmedtypeflags_val)
-
     embed_data_attrs = {
         "mmedaddress": mmedaddress_hex,
         "mmedelementsizebits": str(mmedelementsizebits_Z),
         "mmedmajorstridebits": mmedmajorstridebits_val,
         "mmedminorstridebits": mmedminorstridebits_val,
-        "mmedtypeflags": mmedtypeflags_hex,
+        "mmedtypeflags": "0x02",
         "mmedcolcount": str(width),
         "mmedrowcount": str(height)
     }
@@ -288,29 +279,14 @@ def create_xdf_axis_z(axis_parent, axis_id_param, json_map, base_offset_int):
     units_z = str(_units_z_val).strip() if _units_z_val is not None else "Value"
     if not units_z: units_z = "Value"
 
-    # Min/Max for Z-axis display after math
-    min_val_z_str = str(json_map.get("z_min_val", "0.0")) # Default to 0.0
-    max_val_z_default = "0.0" # Placeholder to be determined
-
-    if is_z_signed:
-        if mmedelementsizebits_Z == 8:
-            max_val_z_default = "127.0" # Example, based on factor/offset these could vary widely
-            if json_map.get("z_min_val") is None : min_val_z_str = "-128.0"
-        elif mmedelementsizebits_Z == 16:
-            max_val_z_default = "32767.0"
-            if json_map.get("z_min_val") is None : min_val_z_str = "-32768.0"
-    else: # Unsigned
-        max_val_z_default = "255.0" if mmedelementsizebits_Z == 8 else "65535.0"
-    
-    max_val_z_str = str(json_map.get("z_max_val", max_val_z_default))
-
+    min_val_z = str(json_map.get("z_min_val", "0.0"))
+    max_val_z = str(json_map.get("z_max_val", "255.0" if mmedelementsizebits_Z == 8 else "65535.0"))
 
     create_text_element(xdf_axis, "decimalpl", str(decimalpl))
     create_text_element(xdf_axis, "units", units_z)
-    create_text_element(xdf_axis, "min", min_val_z_str) 
-    create_text_element(xdf_axis, "max", max_val_z_str) 
+    create_text_element(xdf_axis, "min", min_val_z)
+    create_text_element(xdf_axis, "max", max_val_z)
     create_text_element(xdf_axis, "outputtype", "1")
-
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description="Convert JSON to XDF for ECU mappacks.")
